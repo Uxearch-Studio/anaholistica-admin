@@ -3,49 +3,65 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
-import { Package, PlusCircle } from 'lucide-react';
+import { Package, PlusCircle, WifiOff } from 'lucide-react';
 import Link from 'next/link';
-import { getProducts, updateProductStatus, deleteProduct } from '@/lib/products';
+import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+import { updateProductStatus, deleteProduct } from '@/lib/products';
 import type { Product, ProductStatus } from '@/types/product';
 import StatusBadge from '@/components/ui/StatusBadge';
 import ActionMenu from '@/components/admin/ActionMenu';
 import ProductCard from '@/components/admin/ProductCard';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 
+const configured = !!(
+  process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID &&
+  process.env.NEXT_PUBLIC_FIREBASE_API_KEY
+);
+
+function toProduct(id: string, d: Record<string, unknown>): Product {
+  return {
+    id,
+    name: d.name as string,
+    price: d.price as number,
+    description: d.description as string,
+    imageUrl: (d.imageUrl as string) ?? '',
+    category: d.category as Product['category'],
+    unitsSold: (d.unitsSold as number) ?? 0,
+    status: (d.status as ProductStatus) ?? 'active',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+}
+
 export default function ProductosPage() {
   const router = useRouter();
   const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(configured);
   const [toDelete, setToDelete] = useState<Product | null>(null);
 
   useEffect(() => {
-    const timeout = setTimeout(() => {
-      setLoading(false);
-      setError('No se pudo conectar con la base de datos. Verifica las credenciales de Firebase en Vercel.');
-    }, 8000);
+    if (!configured) return;
 
-    getProducts()
-      .then(setProducts)
-      .catch(() => setError('Error al cargar productos. Verifica la configuración de Firebase.'))
-      .finally(() => { clearTimeout(timeout); setLoading(false); });
-
-    return () => clearTimeout(timeout);
+    const q = query(collection(db, 'products'), orderBy('createdAt', 'desc'));
+    const unsub = onSnapshot(
+      q,
+      snap => {
+        setProducts(snap.docs.map(d => toProduct(d.id, d.data() as Record<string, unknown>)));
+        setLoading(false);
+      },
+      () => setLoading(false)
+    );
+    return () => unsub();
   }, []);
 
   async function handleStatusChange(id: string, status: ProductStatus) {
     await updateProductStatus(id, status);
-    setProducts(prev => prev.map(p => p.id === id ? { ...p, status } : p));
-  }
-
-  async function handleDelete(product: Product) {
-    setToDelete(product);
   }
 
   async function confirmDelete() {
     if (!toDelete) return;
     await deleteProduct(toDelete.id);
-    setProducts(prev => prev.filter(p => p.id !== toDelete.id));
     setToDelete(null);
   }
 
@@ -60,21 +76,9 @@ export default function ProductosPage() {
     );
   }
 
-  if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20 text-center px-4">
-        <div className="w-14 h-14 rounded-full bg-red-50 flex items-center justify-center mb-4">
-          <Package size={28} className="text-red-400" />
-        </div>
-        <p className="font-semibold text-black mb-1">Sin conexión a Firebase</p>
-        <p className="text-sm text-gray-500 max-w-sm">{error}</p>
-      </div>
-    );
-  }
-
   return (
     <>
-      {/* encabezado */}
+      {/* header */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-xl font-bold text-black">Mis Productos</h1>
@@ -90,7 +94,17 @@ export default function ProductosPage() {
         </Link>
       </div>
 
-      {/* vacío */}
+      {/* aviso Firebase no conectado */}
+      {!configured && (
+        <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 mb-5">
+          <WifiOff size={18} className="text-amber-500 flex-shrink-0" />
+          <p className="text-sm text-amber-700">
+            Firebase no está configurado. Conecta las credenciales en Vercel para guardar productos.
+          </p>
+        </div>
+      )}
+
+      {/* empty state */}
       {products.length === 0 && (
         <div className="flex flex-col items-center justify-center py-20 text-center">
           <Package size={48} className="text-cream mb-4" />
@@ -105,7 +119,7 @@ export default function ProductosPage() {
         </div>
       )}
 
-      {/* Mobile: cards */}
+      {/* mobile: cards */}
       {products.length > 0 && (
         <>
           <div className="sm:hidden space-y-3">
@@ -115,12 +129,12 @@ export default function ProductosPage() {
                 product={p}
                 onEdit={() => router.push(`/admin/productos/${p.id}/editar`)}
                 onStatusChange={s => handleStatusChange(p.id, s)}
-                onDelete={() => handleDelete(p)}
+                onDelete={() => setToDelete(p)}
               />
             ))}
           </div>
 
-          {/* Desktop: tabla */}
+          {/* desktop: tabla */}
           <div className="hidden sm:block bg-white rounded-2xl border border-cream overflow-hidden shadow-sm">
             <table className="w-full text-sm">
               <thead>
@@ -128,7 +142,8 @@ export default function ProductosPage() {
                   <th className="text-left px-4 py-3 font-medium text-gray-500">Imagen</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500">Nombre</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500">Precio</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 max-w-[200px]">Descripción</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-500">Descripción</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-500">Categoría</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500">Vendidos</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500">Estado</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500">Acciones</th>
@@ -149,20 +164,19 @@ export default function ProductosPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3 font-medium text-black max-w-[140px] truncate">{p.name}</td>
-                    <td className="px-4 py-3 text-green font-semibold">$ {p.price.toLocaleString('es-CO')}</td>
-                    <td className="px-4 py-3 text-gray-500 max-w-[200px]">
+                    <td className="px-4 py-3 text-green font-semibold whitespace-nowrap">$ {p.price.toLocaleString('es-CO')}</td>
+                    <td className="px-4 py-3 text-gray-500 max-w-[180px]">
                       <p className="truncate">{p.description}</p>
                     </td>
+                    <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{p.category ?? '—'}</td>
                     <td className="px-4 py-3 text-gray-600">{p.unitsSold}</td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={p.status} />
-                    </td>
+                    <td className="px-4 py-3"><StatusBadge status={p.status} /></td>
                     <td className="px-4 py-3">
                       <ActionMenu
                         product={p}
                         onEdit={() => router.push(`/admin/productos/${p.id}/editar`)}
                         onStatusChange={s => handleStatusChange(p.id, s)}
-                        onDelete={() => handleDelete(p)}
+                        onDelete={() => setToDelete(p)}
                       />
                     </td>
                   </tr>
